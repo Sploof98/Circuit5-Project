@@ -44,6 +44,6 @@ HOW TO RUN THE SYSTEM:
         c. RUN python firebase_ingester.py inside system correct directory
     3. DASHBOARD
         - Hosted on Netlify
-            - https://circuit5db.netlify.app/
+            - https://circuit5dash.netlify.app/
 
 
