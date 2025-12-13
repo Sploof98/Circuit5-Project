@@ -14,7 +14,6 @@ static const char AP_PASSWORD[] = "configureme";
 static const int  AP_CHANNEL    = 1;
 
 // EEPROM layout
-static const uint8_t WIFI_MAGIC  = 0x42;
 static const int     EEPROM_ADDR = 0;
 
 // HTTP server for config
@@ -24,6 +23,9 @@ static WiFiServer configServer(80);
 static String getFormField(const String &body, const String &name);
 static String urlDecode(const String &src);
 static void   handleConfigClient(WiFiClient &client, WifiCredentials &creds);
+
+static const int EEPROM_WIFI_ADDR = 0;
+static const int EEPROM_MQTT_ADDR = EEPROM_WIFI_ADDR + sizeof(WifiCredentials);
 
 // ===================== PUBLIC API =====================
 
@@ -102,6 +104,27 @@ void runProvisioningPortal(WifiCredentials &creds) {
   }
 }
 
+// MQTT credentials load/save/clear
+
+bool loadMqttCredentials(MqttCredentials &creds) {
+  EEPROM.get(EEPROM_MQTT_ADDR, creds);
+  if (creds.magic != MQTT_MAGIC) return false;
+  if (creds.broker[0] == '\0') return false;
+  if (creds.topic[0] == '\0') return false;
+  return true;
+}
+
+void saveMqttCredentials(const MqttCredentials &creds) {
+  EEPROM.put(EEPROM_MQTT_ADDR, creds);
+}
+
+void clearMqttCredentials() {
+  MqttCredentials empty;
+  memset(&empty, 0, sizeof(empty));
+  EEPROM.put(EEPROM_MQTT_ADDR, empty);
+}
+
+
 // ===================== INTERNAL HELPERS =====================
 
 static void handleConfigClient(WiFiClient &client, WifiCredentials &creds) {
@@ -138,66 +161,113 @@ static void handleConfigClient(WiFiClient &client, WifiCredentials &creds) {
   Serial.println("=== HTTP Request ===");
   Serial.println(requestLine);
 
-  // POST /save → store credentials
+  // POST /save → store Wi-Fi + MQTT credentials
   if (requestLine.startsWith("POST /save")) {
+    // ---- Wi-Fi fields ----
     String ssidField = urlDecode(getFormField(body, "ssid"));
     String passField = urlDecode(getFormField(body, "password"));
     ssidField.trim();
     passField.trim();
 
-    Serial.print("Received SSID: ");
-    Serial.println(ssidField);
-    Serial.print("Password length: ");
-    Serial.println(passField.length());
+    // ---- MQTT fields ----
+    String brokerField   = urlDecode(getFormField(body, "mqtt_broker"));
+    String portField     = urlDecode(getFormField(body, "mqtt_port"));
+    String userField     = urlDecode(getFormField(body, "mqtt_user"));
+    String mqttPassField = urlDecode(getFormField(body, "mqtt_pass"));
+    String topicField    = urlDecode(getFormField(body, "mqtt_topic"));
 
-    WifiCredentials newCreds;
-    memset(&newCreds, 0, sizeof(newCreds));
-    newCreds.magic = WIFI_MAGIC;
-    ssidField.substring(0, sizeof(newCreds.ssid) - 1).toCharArray(newCreds.ssid, sizeof(newCreds.ssid));
-    passField.substring(0, sizeof(newCreds.password) - 1).toCharArray(newCreds.password, sizeof(newCreds.password));
+    brokerField.trim();
+    portField.trim();
+    userField.trim();
+    mqttPassField.trim();
+    topicField.trim();
 
-    saveWifiCredentials(newCreds);
-    creds = newCreds;  // update caller's copy
+    // Default port if empty / invalid
+    int port = portField.toInt();
+    if (port <= 0) port = 8883;
 
+    // --- Save Wi-Fi ---
+    WifiCredentials newWifi;
+    memset(&newWifi, 0, sizeof(newWifi));
+    newWifi.magic = WIFI_MAGIC;
+
+    ssidField.substring(0, sizeof(newWifi.ssid) - 1)
+        .toCharArray(newWifi.ssid, sizeof(newWifi.ssid));
+    passField.substring(0, sizeof(newWifi.password) - 1)
+        .toCharArray(newWifi.password, sizeof(newWifi.password));
+
+    saveWifiCredentials(newWifi);
+    creds = newWifi;  // update caller’s copy
+
+    // --- Save MQTT ---
+    // Requires you to add MqttCredentials + saveMqttCredentials() in WiFiProvisioning.h/.cpp
+    MqttCredentials newMqtt;
+    memset(&newMqtt, 0, sizeof(newMqtt));
+    newMqtt.magic = MQTT_MAGIC;
+    newMqtt.port  = (uint16_t)port;
+
+    brokerField.substring(0, sizeof(newMqtt.broker) - 1)
+        .toCharArray(newMqtt.broker, sizeof(newMqtt.broker));
+    userField.substring(0, sizeof(newMqtt.username) - 1)
+        .toCharArray(newMqtt.username, sizeof(newMqtt.username));
+    mqttPassField.substring(0, sizeof(newMqtt.password) - 1)
+        .toCharArray(newMqtt.password, sizeof(newMqtt.password));
+    topicField.substring(0, sizeof(newMqtt.topic) - 1)
+        .toCharArray(newMqtt.topic, sizeof(newMqtt.topic));
+
+    saveMqttCredentials(newMqtt);
+
+    // --- Response page ---
     client.println("HTTP/1.1 200 OK");
     client.println("Content-Type: text/html; charset=utf-8");
     client.println("Connection: close");
     client.println();
-    client.println(F("<!DOCTYPE html><html><head><meta charset='utf-8'><title>Wi-Fi Saved</title></head><body>"));
-    client.println(F("<h2>Wi-Fi settings saved ✅</h2>"));
-    client.print(F("<p>SSID: "));
-    client.print(newCreds.ssid);
-    client.println(F("</p>"));
-    client.println(F("<p>Now reset or power-cycle the board.<br>On next boot it will connect to this network.</p>"));
-    client.println(F("<p>COMMENT OUT clearWifiCredentials() in Sketch.ino after saving.</p>"));
-    client.println(F("</body></html>"));
+    client.println(F("<h2>UNO R4 Provisioning</h2>"
+                      "<p>Enter Wi-Fi + MQTT settings for this device.</p>"
+                      "<form method='POST' action='/save'>"
 
-    Serial.println("Credentials saved to EEPROM. Please reset the board.");
+                      "<h3>Wi-Fi</h3>"
+                      "SSID:<br><input type='text' name='ssid' required><br><br>"
+                      "Password:<br><input type='password' name='password'><br><br>"
+
+                      "<h3>MQTT</h3>"
+                      "Broker Host:<br><input type='text' name='mqtt_broker' placeholder='xxxx.s1.eu.hivemq.cloud' required><br><br>"
+                      "Port:<br><input type='number' name='mqtt_port' value='8883' min='1' max='65535' required><br><br>"
+                      "Username:<br><input type='text' name='mqtt_user' required><br><br>"
+                      "Password:<br><input type='password' name='mqtt_pass' required><br><br>"
+                      "Telemetry Topic:<br><input type='text' name='mqtt_topic' placeholder='telemetry/device123' required><br><br>"
+
+                      "<button type='submit'>Save</button>"
+                      "</form>"
+
+                      "<p style='font-size:0.9em;color:#666;'>"
+                      "Credentials are stored on the device (EEPROM emulation). "
+                      "To wipe them later, call clearWifiCredentials() / clearMqttCredentials()."
+                      "</p>"
+                      "</body></html>"));
     return;
-  }
+}
 
-  // Default: serve configuration form
+// If not POST /save, show the config page (GET / or anything else)
   client.println("HTTP/1.1 200 OK");
   client.println("Content-Type: text/html; charset=utf-8");
   client.println("Connection: close");
   client.println();
-  client.println(F("<!DOCTYPE html><html><head>"
-                   "<meta charset='utf-8'>"
-                   "<meta name='viewport' content='width=device-width, initial-scale=1'>"
-                   "<title>UNO R4 WiFi Setup</title>"
-                   "</head><body>"));
-  client.println(F("<h2>UNO R4 WiFi Provisioning</h2>"
-                   "<p>Enter the Wi-Fi network this device should use.</p>"
+  client.println(F("<!DOCTYPE html><html><head><meta charset='utf-8'>"
+                   "<title>Provisioning</title></head><body>"));
+
+  // (same form HTML you used before, or a simpler placeholder for now)
+  client.println(F("<h2>Provisioning</h2>"
                    "<form method='POST' action='/save'>"
-                   "SSID:<br><input type='text' name='ssid' required><br><br>"
-                   "Password:<br><input type='password' name='password'><br><br>"
+                   "SSID:<br><input name='ssid'><br>"
+                   "WiFi Password:<br><input type='password' name='password'><br><br>"
+                   "Broker:<br><input name='mqtt_broker'><br>"
+                   "Port:<br><input name='mqtt_port' value='8883'><br>"
+                   "MQTT User:<br><input name='mqtt_user'><br>"
+                   "MQTT Pass:<br><input type='password' name='mqtt_pass'><br>"
+                   "Topic:<br><input name='mqtt_topic'><br><br>"
                    "<button type='submit'>Save</button>"
-                   "</form>"
-                   "<p style='font-size:0.9em;color:#666;'>"
-                   "Credentials are stored in on-board flash (EEPROM emulation). "
-                   "To wipe them later, implement a factory reset calling clearWifiCredentials()."
-                   "</p>"
-                   "</body></html>"));
+                   "</form></body></html>"));
 }
 
 // Parse form field from x-www-form-urlencoded body

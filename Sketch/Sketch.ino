@@ -49,7 +49,13 @@ bool          redLedState          = LOW;
 String        alertStatus          = "normal";
 
 // Wi-Fi credentials (managed by WiFiProvisioning module)
-WifiCredentials gWifiCreds;
+WifiCredentials wifiCreds;
+MqttCredentials mqttCreds;
+
+bool haveWifi = loadWifiCredentials(wifiCreds);
+bool haveMqtt = loadMqttCredentials(mqttCreds);
+
+
 
 // =====================================================================
 //                        5. SETUP & LOOP
@@ -75,24 +81,24 @@ void setup() {
   // clearWifiCredentials(); // comment out in production!
 
   // --- Wi-Fi provisioning logic ---
-  bool haveCreds = loadWifiCredentials(gWifiCreds);
+  bool haveCreds = loadWifiCredentials(wifiCreds);
   if (!haveCreds) {
     Serial.println("No stored Wi-Fi credentials. Entering config portal...");
     lcd.clear();
     lcd.print("AP: UNO-R4-SETUP");
     lcd.setCursor(0, 1);
     lcd.print("Config via WiFi");
-    runProvisioningPortal(gWifiCreds);  // blocks inside AP/HTTP loop
+    runProvisioningPortal(wifiCreds);  // blocks inside AP/HTTP loop
     while (true) { delay(1000); }       // wait for user reset
   }
 
-  if (!connectWithStoredCredentials(gWifiCreds, 20000)) {
+  if (!connectWithStoredCredentials(wifiCreds, 20000)) {
     Serial.println("Failed to connect, starting config portal...");
     lcd.clear();
     lcd.print("WiFi failed");
     lcd.setCursor(0, 1);
     lcd.print("Open AP to fix");
-    runProvisioningPortal(gWifiCreds);
+    runProvisioningPortal(wifiCreds);
     while (true) { delay(1000); }
   }
 
@@ -101,7 +107,9 @@ void setup() {
   Serial.println("WiFi Connected!");
 
   // --- MQTT setup (now handled by module) ---
+  if (haveWifi && haveMqtt) {
   mqttSetup();
+  }
 
   lcd.clear();
   lcd.print("System Ready");
@@ -115,7 +123,7 @@ void loop() {
   // If Wi-Fi drops, try reconnecting using stored credentials
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("WiFi dropped, reconnecting...");
-    connectWithStoredCredentials(gWifiCreds, 20000);
+    connectWithStoredCredentials(wifiCreds, 20000);
   }
 
   // Let MQTT module handle its own connection/polling logic

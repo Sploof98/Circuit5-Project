@@ -2,22 +2,13 @@
 #include <WiFiS3.h>
 
 #include "MqttTelemetry.h"
+#include "WiFiProvisioning.h"
+
 
 // --- 1. MQTT CONFIG FOR UNO R4 (DEVICE SIDE, TLS + AUTH) ---
 
-// HiveMQ Cloud broker (your private cluster)
-static const char MQTT_BROKER[]   = "a31a3d6ffbe845caaf1b0c59dc4f9ebe.s1.eu.hivemq.cloud";
-static const int  MQTT_PORT       = 8883;   // TLS port
-
-// Topic the UNO publishes to (unchanged)
-static const char MQTT_TOPIC[]    = "hope/iot/circuit5/living-room/uno-r4/telemetry";
-
 // Client ID for this device
 static const char MQTT_CLIENT_ID[] = "uno-r4-living-room";
-
-// HiveMQ Cloud auth (move to a Secrets.h + .gitignore later if you want)
-static const char MQTT_USERNAME[] = "AlexHiveMQ";
-static const char MQTT_PASSWORD[] = "yu81V&9Ni9&'";
 
 // --- 2. GLOBAL MQTT OBJECTS ---
 
@@ -26,6 +17,10 @@ static WiFiSSLClient wifiClient;
 
 // ArduinoMqttClient instance (wraps the SSL client)
 static MqttClient gMqttClient(wifiClient);
+
+// MQTT broker info (HiveMQ Cloud)
+static MqttCredentials gMqttCreds;  // loaded from EEPROM provisioning
+
 
 // Forward declaration of internal helper
 static void connectToMqttBroker();
@@ -40,7 +35,22 @@ void mqttSetup() {
   gMqttClient.setKeepAliveInterval(60);
 
   // Set username/password for HiveMQ Cloud
-  gMqttClient.setUsernamePassword(MQTT_USERNAME, MQTT_PASSWORD);
+  gMqttClient.setUsernamePassword(gMqttCreds.username, gMqttCreds.password);
+
+
+  // Load stored MQTT credentials (saved by provisioning portal)
+  if (!loadMqttCredentials(gMqttCreds)) {
+    Serial.println("MQTT: No stored MQTT credentials. Run provisioning portal.");
+    // Option A: just return and let your main sketch decide what to do
+    return;
+
+    // Option B (if you want it automatic):
+    // runProvisioningPortal(wifiCreds);  // only if you have wifiCreds here
+  }
+
+  // If using HiveMQ username/password auth:
+  gMqttClient.setUsernamePassword(gMqttCreds.username, gMqttCreds.password);
+
 
   // Connect to broker (host + port) in helper
   connectToMqttBroker();
@@ -48,13 +58,11 @@ void mqttSetup() {
 
 
 void mqttLoop() {
-  // Keep MQTT connection alive
-  if (!gMqttClient.connected()) {
-    connectToMqttBroker();
-  }
-
+  if (gMqttCreds.magic != MQTT_MAGIC) return; 
+  if (!gMqttClient.connected()) connectToMqttBroker();
   gMqttClient.poll();
 }
+
 
 void mqttPublishTelemetry(float temperature, float humidity, const String &status) {
   if (!gMqttClient.connected()) {
@@ -79,11 +87,11 @@ void mqttPublishTelemetry(float temperature, float humidity, const String &statu
   payload += "\"}";
 
   Serial.print("MQTT: Publishing to ");
-  Serial.print(MQTT_TOPIC);
+  Serial.print(gMqttCreds.topic);
   Serial.print(" => ");
   Serial.println(payload);
 
-  gMqttClient.beginMessage(MQTT_TOPIC);
+  gMqttClient.beginMessage(gMqttCreds.topic);
   gMqttClient.print(payload);
   gMqttClient.endMessage();
 }
@@ -92,12 +100,12 @@ void mqttPublishTelemetry(float temperature, float humidity, const String &statu
 
 static void connectToMqttBroker() {
   Serial.print("MQTT: Connecting to broker ");
-  Serial.print(MQTT_BROKER);
+  Serial.print(gMqttCreds.broker);
   Serial.print(":");
-  Serial.println(MQTT_PORT);
+  Serial.println(gMqttCreds.port);
 
   int attempts = 0;
-  while (!gMqttClient.connect(MQTT_BROKER, MQTT_PORT)) {
+  while (!gMqttClient.connect(gMqttCreds.broker, gMqttCreds.port)) {
     Serial.print("MQTT connect failed, error code = ");
     Serial.println(gMqttClient.connectError());
 

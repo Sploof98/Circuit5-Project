@@ -3,15 +3,16 @@ import time
 from datetime import datetime, timezone
 
 import paho.mqtt.client as mqtt  # pip install paho-mqtt
-import ssl # for TLS if needed
+import ssl # for TLS connection
+import os
 
 # --- 1. MQTT CONFIG (MATCH UNO + DASHBOARD) ---
-BROKER = "a31a3d6ffbe845caaf1b0c59dc4f9ebe.s1.eu.hivemq.cloud"
-PORT = 8883
-TOPIC = "hope/iot/circuit5/living-room/uno-r4/telemetry"
+BROKER = os.environ["MQTT_BROKER"]
+PORT = int(os.getenv("MQTT_PORT", "8883"))
+TOPIC = os.environ["MQTT_TOPIC"]
 
-USERNAME = "AlexHiveMQ"
-PASSWORD = "yu81V&9Ni9&'"
+USERNAME = os.environ["MQTT_USERNAME"]
+PASSWORD = os.environ["MQTT_PASSWORD"]
 
 
 # --- 2. FIREBASE CONFIG (REALTIME DATABASE) ---
@@ -24,8 +25,9 @@ PASSWORD = "yu81V&9Ni9&'"
 import firebase_admin           # pip install firebase-admin
 from firebase_admin import credentials, db
 
-SERVICE_ACCOUNT_PATH = r"c:/Users/Alex/OneDrive/Desktop/Year 3/1 - Internet of Things/serviceAccountKey.json"
-DATABASE_URL = "https://iotsystem-circuit5-default-rtdb.europe-west1.firebasedatabase.app"
+SERVICE_ACCOUNT_PATH = os.environ["FIREBASE_SERVICE_ACCOUNT_JSON"]
+DATABASE_URL = os.environ["FIREBASE_DATABASE_URL"]
+
 
 
 def init_firebase():
@@ -163,10 +165,9 @@ def main():
      # --- AUTH + TLS for HiveMQ Cloud ---
     client.username_pw_set(USERNAME, PASSWORD)
 
-    # For proper security, you should use CERT_REQUIRED with a CA bundle.
-    # For quick testing in a lab/demo environment, CERT_NONE will work
-    # but does not validate the server certificate.
-    client.tls_set(cert_reqs=ssl.CERT_NONE)
+    client.tls_set(cert_reqs=ssl.CERT_REQUIRED)  # validate broker cert
+    client.tls_insecure_set(False)
+
 
     client.on_connect = on_connect
     client.on_message = on_message
